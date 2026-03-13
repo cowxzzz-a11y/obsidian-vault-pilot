@@ -8,7 +8,7 @@ export interface VaultPilotSettings {
 
 export const DEFAULT_SETTINGS: VaultPilotSettings = {
   gitRepoPath: "",
-  nasPosterExtensions: ["jpg", "png", "webp"],
+  nasPosterExtensions: ["png", "jpg", "webp"],
 }
 
 export class VaultPilotSettingTab extends PluginSettingTab {
@@ -43,7 +43,7 @@ export class VaultPilotSettingTab extends PluginSettingTab {
       .setDesc("插入 NAS 视频时，会依次尝试 covers 下的这些后缀。")
       .addText((text) =>
         text
-          .setPlaceholder("jpg,png,webp")
+          .setPlaceholder("png,jpg,webp")
           .setValue(this.plugin.settings.nasPosterExtensions.join(","))
           .onChange(async (value) => {
             this.plugin.settings.nasPosterExtensions = value

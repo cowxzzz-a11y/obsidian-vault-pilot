@@ -4,6 +4,7 @@ import { openNasVideoPrompt } from "../ui/nasVideoModal"
 import {
   buildNasVideoHtml,
   detectPosterUrl,
+  getVideoDimensions,
   insertHtmlIntoCanvas,
   insertHtmlIntoMarkdown,
 } from "../features/nasVideo"
@@ -16,7 +17,10 @@ export function registerNasVideoCommands(plugin: VaultPilotPlugin) {
       const url = await openNasVideoPrompt(plugin.app)
       if (!url) return
 
-      const posterUrl = await detectPosterUrl(url, plugin.settings.nasPosterExtensions)
+      const [posterUrl, videoDimensions] = await Promise.all([
+        detectPosterUrl(url, plugin.settings.nasPosterExtensions),
+        getVideoDimensions(url),
+      ])
       const html = buildNasVideoHtml(url, posterUrl)
       const markdownView = plugin.app.workspace.getActiveViewOfType(MarkdownView)
 
@@ -28,7 +32,7 @@ export function registerNasVideoCommands(plugin: VaultPilotPlugin) {
 
       const activeView = plugin.app.workspace.getActiveViewOfType(ItemView)
       if (activeView?.getViewType() === "canvas") {
-        insertHtmlIntoCanvas(activeView as never, html)
+        insertHtmlIntoCanvas(activeView as never, html, videoDimensions)
         new Notice("Vault Pilot：已在 Canvas 新建视频卡片")
         return
       }

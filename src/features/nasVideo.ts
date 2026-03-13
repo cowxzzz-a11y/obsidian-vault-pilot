@@ -1,6 +1,11 @@
 import { Editor } from "obsidian"
 import { CanvasData, CanvasTextData } from "obsidian/canvas"
 
+export type VideoDimensions = {
+  width: number
+  height: number
+}
+
 type CanvasNodeLike = {
   id: string
   x: number
@@ -47,7 +52,7 @@ function randomId(length = 16): string {
 export function buildNasVideoHtml(url: string, posterUrl?: string | null): string {
   const safeUrl = escapeHtmlAttribute(url)
   const posterAttr = posterUrl ? ` poster="${escapeHtmlAttribute(posterUrl)}"` : ""
-  return `<video controls playsinline preload="metadata"${posterAttr} style="width:100%; border-radius:8px;" src="${safeUrl}"></video>`
+  return `<video controls playsinline preload="metadata"${posterAttr} style="display:block; width:100%; border-radius:8px; background:#000;" src="${safeUrl}"></video>`
 }
 
 export function insertHtmlIntoMarkdown(editor: Editor, html: string): void {
@@ -61,11 +66,16 @@ export function insertHtmlIntoMarkdown(editor: Editor, html: string): void {
   editor.replaceRange(block, cursor)
 }
 
-export function insertHtmlIntoCanvas(view: CanvasViewLike, html: string): void {
+export function insertHtmlIntoCanvas(
+  view: CanvasViewLike,
+  html: string,
+  dimensions?: VideoDimensions | null,
+): void {
   const canvas = view.canvas
   const selectedNode = canvas.selection.size === 1 ? Array.from(canvas.selection)[0] : null
   const x = selectedNode ? selectedNode.x + selectedNode.width + 80 : canvas.x + 80
   const y = selectedNode ? selectedNode.y : canvas.y + 80
+  const nodeSize = calculateCanvasVideoNodeSize(dimensions)
 
   const data = canvas.getData()
   const nodeId = randomId()
@@ -73,8 +83,8 @@ export function insertHtmlIntoCanvas(view: CanvasViewLike, html: string): void {
     id: nodeId,
     x,
     y,
-    width: 520,
-    height: 140,
+    width: nodeSize.width,
+    height: nodeSize.height,
     type: "text",
     text: html,
   }
@@ -91,6 +101,34 @@ export function insertHtmlIntoCanvas(view: CanvasViewLike, html: string): void {
     canvas.deselectAll()
     canvas.selectOnly(createdNode)
     canvas.zoomToSelection()
+  }
+}
+
+function calculateCanvasVideoNodeSize(dimensions?: VideoDimensions | null): VideoDimensions {
+  const fallbackWidth = 760
+  const chromeHeight = 44
+
+  if (!dimensions || !dimensions.width || !dimensions.height) {
+    return {
+      width: fallbackWidth,
+      height: Math.round(fallbackWidth / (16 / 9) + chromeHeight),
+    }
+  }
+
+  const aspectRatio = dimensions.width / dimensions.height
+
+  if (aspectRatio >= 1) {
+    const width = Math.min(Math.max(dimensions.width, 640), 920)
+    return {
+      width,
+      height: Math.round(width / aspectRatio + chromeHeight),
+    }
+  }
+
+  const height = Math.min(Math.max(dimensions.height, 480), 860)
+  return {
+    width: Math.round(height * aspectRatio),
+    height: height + chromeHeight,
   }
 }
 
@@ -112,23 +150,24 @@ function buildPosterCandidateUrl(videoUrl: string, extension: string): string | 
   }
 }
 
-async function urlExists(url: string): Promise<boolean> {
-  try {
-    const response = await fetch(url, { method: "HEAD" })
-    if (response.ok) return true
-  } catch {
-    // ignore HEAD failures and fall through
-  }
+function probeImageUrl(url: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const image = new Image()
+    const timeoutId = window.setTimeout(() => {
+      image.src = ""
+      resolve(false)
+    }, 5000)
 
-  try {
-    const response = await fetch(url, {
-      method: "GET",
-      headers: { Range: "bytes=0-0" },
-    })
-    return response.ok || response.status === 206
-  } catch {
-    return false
-  }
+    image.onload = () => {
+      window.clearTimeout(timeoutId)
+      resolve(true)
+    }
+    image.onerror = () => {
+      window.clearTimeout(timeoutId)
+      resolve(false)
+    }
+    image.src = url
+  })
 }
 
 export async function detectPosterUrl(
@@ -140,10 +179,41 @@ export async function detectPosterUrl(
     .filter((candidate): candidate is string => Boolean(candidate))
 
   for (const candidate of candidates) {
-    if (await urlExists(candidate)) {
+    if (await probeImageUrl(candidate)) {
       return candidate
     }
   }
 
   return null
+}
+
+export function getVideoDimensions(url: string): Promise<VideoDimensions | null> {
+  return new Promise((resolve) => {
+    const video = document.createElement("video")
+    const timeoutId = window.setTimeout(() => {
+      cleanup()
+      resolve(null)
+    }, 8000)
+
+    const cleanup = () => {
+      window.clearTimeout(timeoutId)
+      video.removeAttribute("src")
+      video.load()
+    }
+
+    video.preload = "metadata"
+    video.playsInline = true
+    video.muted = true
+    video.onloadedmetadata = () => {
+      const width = video.videoWidth
+      const height = video.videoHeight
+      cleanup()
+      resolve(width > 0 && height > 0 ? { width, height } : null)
+    }
+    video.onerror = () => {
+      cleanup()
+      resolve(null)
+    }
+    video.src = url
+  })
 }
