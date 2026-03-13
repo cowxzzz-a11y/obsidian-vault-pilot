@@ -4,11 +4,13 @@ import VaultPilotPlugin from "./main"
 export interface VaultPilotSettings {
   gitRepoPath: string
   nasPosterExtensions: string[]
+  gitCommitPrefix: string
 }
 
 export const DEFAULT_SETTINGS: VaultPilotSettings = {
   gitRepoPath: "",
   nasPosterExtensions: ["png", "jpg", "webp"],
+  gitCommitPrefix: "chore: vault update",
 }
 
 export class VaultPilotSettingTab extends PluginSettingTab {
@@ -50,6 +52,19 @@ export class VaultPilotSettingTab extends PluginSettingTab {
               .split(",")
               .map((item) => item.trim().replace(/^\./, ""))
               .filter(Boolean)
+            await this.plugin.saveSettings()
+          }),
+      )
+
+    new Setting(containerEl)
+      .setName("Git 提交前缀")
+      .setDesc("一键推送时会自动拼接时间，形成最终提交信息。")
+      .addText((text) =>
+        text
+          .setPlaceholder("chore: vault update")
+          .setValue(this.plugin.settings.gitCommitPrefix)
+          .onChange(async (value) => {
+            this.plugin.settings.gitCommitPrefix = value.trim() || DEFAULT_SETTINGS.gitCommitPrefix
             await this.plugin.saveSettings()
           }),
       )

@@ -1,5 +1,6 @@
 import { Notice, Plugin } from "obsidian"
 import { registerCommands } from "./commands"
+import { runQuickPush } from "./features/quickPush"
 import { DEFAULT_SETTINGS, VaultPilotSettings, VaultPilotSettingTab } from "./settings"
 
 export default class VaultPilotPlugin extends Plugin {
@@ -8,8 +9,15 @@ export default class VaultPilotPlugin extends Plugin {
   async onload() {
     await this.loadSettings()
 
-    this.addRibbonIcon("rocket", "Vault Pilot：一键推送仓库", () => {
-      new Notice("Vault Pilot 已加载，下一步开始接入真实推送逻辑。")
+    this.addRibbonIcon("rocket", "Vault Pilot：一键推送仓库", async () => {
+      new Notice("Vault Pilot：开始推送仓库…")
+      try {
+        const result = await runQuickPush(this)
+        new Notice(result, 6000)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "未知错误"
+        new Notice(`Vault Pilot 推送失败：${message}`, 8000)
+      }
     })
 
     registerCommands(this)
