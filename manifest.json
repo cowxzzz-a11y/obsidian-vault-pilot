@@ -1,0 +1,10 @@
+{
+  "id": "vault-pilot",
+  "name": "Vault Pilot",
+  "version": "0.0.1",
+  "minAppVersion": "1.5.0",
+  "description": "NAS 视频插入、一键 Git 推送与更聪明的 Canvas 工作流工具箱。",
+  "author": "cowxzzz-a11y",
+  "authorUrl": "https://github.com/cowxzzz-a11y",
+  "isDesktopOnly": false
+}
