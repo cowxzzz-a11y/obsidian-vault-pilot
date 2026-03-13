@@ -52,7 +52,7 @@ function randomId(length = 16): string {
 export function buildNasVideoHtml(url: string, posterUrl?: string | null): string {
   const safeUrl = escapeHtmlAttribute(url)
   const posterAttr = posterUrl ? ` poster="${escapeHtmlAttribute(posterUrl)}"` : ""
-  return `<div class="vault-pilot-video-shell"><video controls playsinline preload="metadata"${posterAttr} style="display:block; width:100%; height:100%; border-radius:8px; background:#000; object-fit:contain;" src="${safeUrl}"></video></div>`
+  return `<div style="width:100%; height:100%; display:flex; align-items:center; justify-content:center; padding:8px; box-sizing:border-box;"><video controls playsinline preload="metadata"${posterAttr} style="display:block; width:100%; height:100%; border-radius:8px; background:#000; object-fit:contain;" src="${safeUrl}"></video></div>`
 }
 
 export function insertHtmlIntoMarkdown(editor: Editor, html: string): void {
@@ -107,12 +107,11 @@ export function insertHtmlIntoCanvas(
 function calculateCanvasVideoNodeSize(dimensions?: VideoDimensions | null): VideoDimensions {
   const fallbackWidth = 760
   const shellPadding = 16
-  const chromeHeight = 44
 
   if (!dimensions || !dimensions.width || !dimensions.height) {
     return {
       width: fallbackWidth,
-      height: Math.round(fallbackWidth / (16 / 9) + chromeHeight + shellPadding),
+      height: Math.round(fallbackWidth / (16 / 9) + shellPadding),
     }
   }
 
@@ -122,14 +121,14 @@ function calculateCanvasVideoNodeSize(dimensions?: VideoDimensions | null): Vide
     const width = Math.min(Math.max(dimensions.width, 640), 920)
     return {
       width,
-      height: Math.round(width / aspectRatio + chromeHeight + shellPadding),
+      height: Math.round(width / aspectRatio + shellPadding),
     }
   }
 
   const height = Math.min(Math.max(dimensions.height, 480), 860)
   return {
     width: Math.round(height * aspectRatio),
-    height: height + chromeHeight + shellPadding,
+    height: height + shellPadding,
   }
 }
 
