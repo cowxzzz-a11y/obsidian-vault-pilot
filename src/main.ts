@@ -1,7 +1,7 @@
 import { Notice, Plugin } from "obsidian"
 import { registerCommands } from "./commands"
 import { runQuickPush } from "./features/quickPush"
-import { registerSmartMindmapHotkeys } from "./features/smartMindmap"
+import { registerSmartMindmapAutoResize, registerSmartMindmapHotkeys } from "./features/smartMindmap"
 import { DEFAULT_SETTINGS, VaultPilotSettings, VaultPilotSettingTab } from "./settings"
 
 export default class VaultPilotPlugin extends Plugin {
@@ -23,6 +23,7 @@ export default class VaultPilotPlugin extends Plugin {
 
     registerCommands(this)
     registerSmartMindmapHotkeys(this)
+    registerSmartMindmapAutoResize(this)
     this.addSettingTab(new VaultPilotSettingTab(this.app, this))
   }
 

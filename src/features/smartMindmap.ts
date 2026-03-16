@@ -1,8 +1,12 @@
-import { App, ItemView, Plugin } from "obsidian"
+import { App, ItemView, Plugin, debounce, editorInfoField } from "obsidian"
+import { EditorView } from "@codemirror/view"
 import { CanvasData, CanvasTextData } from "obsidian/canvas"
 
-const NODE_WIDTH = 280
-const NODE_HEIGHT = 110
+const MIN_NODE_WIDTH = 180
+const MIN_NODE_HEIGHT = 56
+const MAX_NODE_WIDTH = 420
+const NODE_HORIZONTAL_PADDING = 56
+const NODE_VERTICAL_PADDING = 24
 const HORIZONTAL_GAP = 220
 const VERTICAL_GAP = 36
 
@@ -13,7 +17,9 @@ type CanvasNodeLike = {
   width: number
   height: number
   isEditing?: boolean
+  canvas?: CanvasLike
   moveTo(position: { x: number; y: number }): void
+  resize(size: { width: number; height: number }): void
   startEditing(): void
 }
 
@@ -201,8 +207,8 @@ export async function createSmartChildNode(canvasView: CanvasViewLike): Promise<
     canvas,
     parent.x + parent.width + HORIZONTAL_GAP,
     parent.y,
-    Math.max(parent.width, NODE_WIDTH),
-    Math.max(parent.height, NODE_HEIGHT),
+    MIN_NODE_WIDTH,
+    MIN_NODE_HEIGHT,
   )
 
   if (!child) return false
@@ -228,8 +234,8 @@ export async function createSmartSiblingNode(canvasView: CanvasViewLike): Promis
     canvas,
     selected.x,
     selected.y + selected.height + VERTICAL_GAP,
-    Math.max(selected.width, NODE_WIDTH),
-    Math.max(selected.height, NODE_HEIGHT),
+    MIN_NODE_WIDTH,
+    MIN_NODE_HEIGHT,
   )
 
   if (!sibling) return false
@@ -281,4 +287,47 @@ export function registerSmartMindmapHotkeys(plugin: Plugin & { app: App }): void
     event.preventDefault()
     void runSmartShortcut(plugin.app, event.key)
   })
+}
+
+function getLongestLineLength(view: EditorView): number {
+  let longest = 0
+  for (let lineNumber = 1; lineNumber <= view.state.doc.lines; lineNumber++) {
+    longest = Math.max(longest, view.state.doc.line(lineNumber).length)
+  }
+  return longest
+}
+
+function calculateNodeSizeFromEditor(view: EditorView): { width: number; height: number } {
+  const longestLineLength = getLongestLineLength(view)
+  const estimatedWidth = Math.round(longestLineLength * view.defaultCharacterWidth + NODE_HORIZONTAL_PADDING)
+  const width = Math.min(Math.max(estimatedWidth, MIN_NODE_WIDTH), MAX_NODE_WIDTH)
+  const height = Math.max(Math.round(view.contentHeight + NODE_VERTICAL_PADDING), MIN_NODE_HEIGHT)
+  return { width, height }
+}
+
+export function registerSmartMindmapAutoResize(plugin: Plugin & { app: App }): void {
+  const debouncedRelayout = debounce((canvas: CanvasLike, node: CanvasNodeLike) => {
+    const root = getRootNode(canvas, node)
+    relayoutFromRoot(canvas, root)
+  }, 150, false)
+
+  plugin.registerEditorExtension(
+    EditorView.updateListener.of((update) => {
+      if (!update.docChanged) return
+
+      const editorInfo = update.state.field(editorInfoField) as unknown as {
+        node?: CanvasNodeLike
+      }
+      const node = editorInfo?.node
+      const canvas = node?.canvas
+
+      if (!node || !canvas || typeof node.resize !== "function") return
+
+      const nextSize = calculateNodeSizeFromEditor(update.view)
+      if (node.width === nextSize.width && node.height === nextSize.height) return
+
+      node.resize(nextSize)
+      debouncedRelayout(canvas, node)
+    }),
+  )
 }
