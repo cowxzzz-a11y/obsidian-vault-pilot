@@ -4,11 +4,15 @@ import { CanvasData, CanvasTextData } from "obsidian/canvas"
 
 const MIN_NODE_WIDTH = 180
 const MIN_NODE_HEIGHT = 56
-const MAX_NODE_WIDTH = 420
-const NODE_HORIZONTAL_PADDING = 56
-const NODE_VERTICAL_PADDING = 24
+const MAX_NODE_WIDTH = 860
+const NODE_HORIZONTAL_PADDING = 72
+const NODE_VERTICAL_PADDING = 40
 const HORIZONTAL_GAP = 220
 const VERTICAL_GAP = 36
+
+type CanvasLeafLike = {
+  view?: ItemView
+}
 
 type CanvasNodeLike = {
   id: string
@@ -189,11 +193,71 @@ function relayoutFromRoot(canvas: CanvasLike, root: CanvasNodeLike): void {
   canvas.requestSave()
 }
 
+const debouncedCanvasRelayout = debounce((canvas: CanvasLike, node: CanvasNodeLike) => {
+  const root = getRootNode(canvas, node)
+  relayoutFromRoot(canvas, root)
+}, 150, false)
+
 function focusNode(canvas: CanvasLike, node: CanvasNodeLike): void {
   canvas.deselectAll()
   canvas.selectOnly(node)
   canvas.zoomToSelection()
   window.setTimeout(() => node.startEditing(), 50)
+}
+
+function patchResizePrototype(
+  plugin: Plugin,
+  target: Record<string, unknown>,
+  methodName: "resize" | "moveAndResize",
+): void {
+  const original = target[methodName]
+  if (typeof original !== "function") return
+  if ((original as { __vaultPilotPatched?: boolean }).__vaultPilotPatched) return
+
+  const wrapped = function (this: CanvasNodeLike, ...args: unknown[]) {
+    const widthBefore = this.width
+    const heightBefore = this.height
+    const result = (original as (...innerArgs: unknown[]) => unknown).apply(this, args)
+    const changed = widthBefore !== this.width || heightBefore !== this.height
+
+    if (changed && this.canvas) {
+      debouncedCanvasRelayout(this.canvas, this)
+    }
+
+    return result
+  } as typeof original & { __vaultPilotPatched?: boolean }
+
+  wrapped.__vaultPilotPatched = true
+  target[methodName] = wrapped
+
+  plugin.register(() => {
+    if (target[methodName] === wrapped) {
+      target[methodName] = original
+    }
+  })
+}
+
+function ensureCanvasNodePrototypePatched(plugin: Plugin, node: CanvasNodeLike | null | undefined): void {
+  if (!node) return
+
+  const nodeProto = Object.getPrototypeOf(node) as Record<string, unknown> | null
+  if (nodeProto) {
+    patchResizePrototype(plugin, nodeProto, "resize")
+  }
+
+  const parentProto = nodeProto ? (Object.getPrototypeOf(nodeProto) as Record<string, unknown> | null) : null
+  if (parentProto) {
+    patchResizePrototype(plugin, parentProto, "moveAndResize")
+  }
+}
+
+function patchExistingCanvasNodes(plugin: Plugin & { app: App }): void {
+  const canvasLeaves = plugin.app.workspace.getLeavesOfType("canvas") as unknown as CanvasLeafLike[]
+  for (const leaf of canvasLeaves) {
+    const view = getActiveCanvasView((leaf.view ?? null) as ItemView | null)
+    const firstNode = view ? Array.from(view.canvas.nodes.values())[0] : null
+    ensureCanvasNodePrototypePatched(plugin, firstNode)
+  }
 }
 
 export async function createSmartChildNode(canvasView: CanvasViewLike): Promise<boolean> {
@@ -213,6 +277,7 @@ export async function createSmartChildNode(canvasView: CanvasViewLike): Promise<
 
   if (!child) return false
 
+  ensureCanvasNodePrototypePatched({ register: () => undefined } as unknown as Plugin, child)
   addEdge(canvas, parent, child)
   const root = getRootNode(canvas, parent)
   relayoutFromRoot(canvas, root)
@@ -240,6 +305,7 @@ export async function createSmartSiblingNode(canvasView: CanvasViewLike): Promis
 
   if (!sibling) return false
 
+  ensureCanvasNodePrototypePatched({ register: () => undefined } as unknown as Plugin, sibling)
   addEdge(canvas, parent, sibling)
   const root = getRootNode(canvas, parent)
   relayoutFromRoot(canvas, root)
@@ -306,10 +372,9 @@ function calculateNodeSizeFromEditor(view: EditorView): { width: number; height:
 }
 
 export function registerSmartMindmapAutoResize(plugin: Plugin & { app: App }): void {
-  const debouncedRelayout = debounce((canvas: CanvasLike, node: CanvasNodeLike) => {
-    const root = getRootNode(canvas, node)
-    relayoutFromRoot(canvas, root)
-  }, 150, false)
+  patchExistingCanvasNodes(plugin)
+  plugin.registerEvent(plugin.app.workspace.on("layout-change", () => patchExistingCanvasNodes(plugin)))
+  plugin.registerEvent(plugin.app.workspace.on("active-leaf-change", () => patchExistingCanvasNodes(plugin)))
 
   plugin.registerEditorExtension(
     EditorView.updateListener.of((update) => {
@@ -326,8 +391,9 @@ export function registerSmartMindmapAutoResize(plugin: Plugin & { app: App }): v
       const nextSize = calculateNodeSizeFromEditor(update.view)
       if (node.width === nextSize.width && node.height === nextSize.height) return
 
+      ensureCanvasNodePrototypePatched(plugin, node)
       node.resize(nextSize)
-      debouncedRelayout(canvas, node)
+      debouncedCanvasRelayout(canvas, node)
     }),
   )
 }
