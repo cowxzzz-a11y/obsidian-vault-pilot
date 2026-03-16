@@ -1,10 +1,10 @@
-import { App, ItemView, Plugin, debounce, editorInfoField } from "obsidian"
+import { App, ItemView, MarkdownFileInfo, Plugin, debounce, editorInfoField } from "obsidian"
 import { EditorView } from "@codemirror/view"
 import { CanvasData, CanvasTextData } from "obsidian/canvas"
 
 const MIN_NODE_WIDTH = 180
 const MIN_NODE_HEIGHT = 56
-const MAX_NODE_WIDTH = 860
+const MAX_NODE_WIDTH = 1400
 const NODE_HORIZONTAL_PADDING = 72
 const NODE_VERTICAL_PADDING = 40
 const HORIZONTAL_GAP = 220
@@ -12,6 +12,12 @@ const VERTICAL_GAP = 36
 
 type CanvasLeafLike = {
   view?: ItemView
+}
+
+type CanvasEditorInfoLike = MarkdownFileInfo & {
+  node?: CanvasNodeLike
+  containerEl?: HTMLElement
+  showPreview?: (preview: boolean) => unknown
 }
 
 type CanvasNodeLike = {
@@ -366,15 +372,82 @@ function getLongestLineLength(view: EditorView): number {
 function calculateNodeSizeFromEditor(view: EditorView): { width: number; height: number } {
   const longestLineLength = getLongestLineLength(view)
   const estimatedWidth = Math.round(longestLineLength * view.defaultCharacterWidth + NODE_HORIZONTAL_PADDING)
-  const width = Math.min(Math.max(estimatedWidth, MIN_NODE_WIDTH), MAX_NODE_WIDTH)
-  const height = Math.max(Math.round(view.contentHeight + NODE_VERTICAL_PADDING), MIN_NODE_HEIGHT)
+  const domWidth = Math.ceil(Math.max(view.contentDOM.scrollWidth, view.scrollDOM.scrollWidth) + NODE_HORIZONTAL_PADDING)
+  const domHeight = Math.ceil(Math.max(view.contentDOM.scrollHeight, view.scrollDOM.scrollHeight) + NODE_VERTICAL_PADDING)
+  const width = Math.min(Math.max(Math.max(estimatedWidth, domWidth), MIN_NODE_WIDTH), MAX_NODE_WIDTH)
+  const height = Math.max(Math.max(Math.round(view.contentHeight + NODE_VERTICAL_PADDING), domHeight), MIN_NODE_HEIGHT)
   return { width, height }
+}
+
+function calculateNodeSizeFromContainer(containerEl: HTMLElement): { width: number; height: number } | null {
+  const contentEl = containerEl.querySelector<HTMLElement>(".cm-content")
+  const scrollerEl = containerEl.querySelector<HTMLElement>(".cm-scroller")
+  if (!contentEl && !scrollerEl) return null
+
+  const measuredWidth = Math.max(contentEl?.scrollWidth ?? 0, scrollerEl?.scrollWidth ?? 0)
+  const measuredHeight = Math.max(contentEl?.scrollHeight ?? 0, scrollerEl?.scrollHeight ?? 0)
+
+  return {
+    width: Math.min(Math.max(Math.ceil(measuredWidth + NODE_HORIZONTAL_PADDING), MIN_NODE_WIDTH), MAX_NODE_WIDTH),
+    height: Math.max(Math.ceil(measuredHeight + NODE_VERTICAL_PADDING), MIN_NODE_HEIGHT),
+  }
+}
+
+function syncNodeSize(node: CanvasNodeLike, canvas: CanvasLike, size: { width: number; height: number } | null): void {
+  if (!size) return
+  if (node.width === size.width && node.height === size.height) return
+  ensureCanvasNodePrototypePatched({ register: () => undefined } as unknown as Plugin, node)
+  node.resize(size)
+  debouncedCanvasRelayout(canvas, node)
+}
+
+function patchActiveEditorPreview(plugin: Plugin & { app: App }): void {
+  const activeEditor = plugin.app.workspace.activeEditor as CanvasEditorInfoLike | null
+  if (!activeEditor?.node || !activeEditor.containerEl) return
+
+  const proto = Object.getPrototypeOf(activeEditor) as Record<string, unknown> | null
+  if (!proto) return
+  const original = proto.showPreview
+  if (typeof original !== "function") return
+  if ((original as { __vaultPilotPatched?: boolean }).__vaultPilotPatched) return
+
+  const wrapped = function (this: CanvasEditorInfoLike, preview: boolean) {
+    if (preview && this.node?.canvas && this.containerEl) {
+      const size = calculateNodeSizeFromContainer(this.containerEl)
+      syncNodeSize(this.node, this.node.canvas, size)
+    }
+    return (original as (flag: boolean) => unknown).call(this, preview)
+  } as typeof original & { __vaultPilotPatched?: boolean }
+
+  wrapped.__vaultPilotPatched = true
+  proto.showPreview = wrapped
+
+  plugin.register(() => {
+    if (proto.showPreview === wrapped) {
+      proto.showPreview = original
+    }
+  })
 }
 
 export function registerSmartMindmapAutoResize(plugin: Plugin & { app: App }): void {
   patchExistingCanvasNodes(plugin)
   plugin.registerEvent(plugin.app.workspace.on("layout-change", () => patchExistingCanvasNodes(plugin)))
   plugin.registerEvent(plugin.app.workspace.on("active-leaf-change", () => patchExistingCanvasNodes(plugin)))
+  plugin.registerEvent(plugin.app.workspace.on("editor-paste", (_evt, _editor, info) => {
+    const editorInfo = info as CanvasEditorInfoLike
+    if (!editorInfo.node?.canvas || !editorInfo.containerEl) return
+    window.setTimeout(() => {
+      syncNodeSize(editorInfo.node!, editorInfo.node!.canvas!, calculateNodeSizeFromContainer(editorInfo.containerEl!))
+    }, 30)
+  }))
+  plugin.registerEvent(plugin.app.workspace.on("editor-change", (_editor, info) => {
+    const editorInfo = info as CanvasEditorInfoLike
+    if (!editorInfo.node?.canvas || !editorInfo.containerEl) return
+    patchActiveEditorPreview(plugin)
+    window.setTimeout(() => {
+      syncNodeSize(editorInfo.node!, editorInfo.node!.canvas!, calculateNodeSizeFromContainer(editorInfo.containerEl!))
+    }, 10)
+  }))
 
   plugin.registerEditorExtension(
     EditorView.updateListener.of((update) => {
@@ -389,11 +462,7 @@ export function registerSmartMindmapAutoResize(plugin: Plugin & { app: App }): v
       if (!node || !canvas || typeof node.resize !== "function") return
 
       const nextSize = calculateNodeSizeFromEditor(update.view)
-      if (node.width === nextSize.width && node.height === nextSize.height) return
-
-      ensureCanvasNodePrototypePatched(plugin, node)
-      node.resize(nextSize)
-      debouncedCanvasRelayout(canvas, node)
+      syncNodeSize(node, canvas, nextSize)
     }),
   )
 }
