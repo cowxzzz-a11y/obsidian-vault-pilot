@@ -1,4 +1,4 @@
-import { ItemView } from "obsidian"
+import { App, ItemView, Plugin } from "obsidian"
 import { CanvasData, CanvasTextData } from "obsidian/canvas"
 
 const NODE_WIDTH = 280
@@ -239,4 +239,46 @@ export async function createSmartSiblingNode(canvasView: CanvasViewLike): Promis
   relayoutFromRoot(canvas, root)
   focusNode(canvas, sibling)
   return true
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+
+  const editable = target.closest(
+    "input, textarea, [contenteditable='true'], .cm-content, .canvas-node-content.is-editing, .canvas-node.is-editing",
+  )
+  return Boolean(editable)
+}
+
+function isCanvasInteractionTarget(view: CanvasViewLike, target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  const container = (view as unknown as { contentEl?: HTMLElement }).contentEl
+  return container ? container.contains(target) : true
+}
+
+async function runSmartShortcut(app: App, key: "Tab" | "Enter"): Promise<boolean> {
+  const view = getActiveCanvasView(app.workspace.getActiveViewOfType(ItemView))
+  if (!view) return false
+
+  if (key === "Tab") {
+    return createSmartChildNode(view)
+  }
+
+  return createSmartSiblingNode(view)
+}
+
+export function registerSmartMindmapHotkeys(plugin: Plugin & { app: App }): void {
+  plugin.registerDomEvent(document, "keydown", (event: KeyboardEvent) => {
+    if (event.defaultPrevented || event.isComposing) return
+    if (event.ctrlKey || event.metaKey || event.altKey) return
+    if (event.key !== "Tab" && event.key !== "Enter") return
+    if (isEditableTarget(event.target)) return
+
+    const view = getActiveCanvasView(plugin.app.workspace.getActiveViewOfType(ItemView))
+    if (!view) return
+    if (!isCanvasInteractionTarget(view, event.target)) return
+
+    event.preventDefault()
+    void runSmartShortcut(plugin.app, event.key)
+  })
 }
