@@ -6,7 +6,7 @@ const MIN_NODE_WIDTH = 180
 const MIN_NODE_HEIGHT = 56
 const MAX_NODE_WIDTH = 1800
 const NODE_HORIZONTAL_PADDING = 72
-const NODE_VERTICAL_PADDING = 24
+const NODE_VERTICAL_PADDING = 12
 const HORIZONTAL_GAP = 220
 const VERTICAL_GAP = 36
 
@@ -383,9 +383,8 @@ function calculateNodeSizeFromEditor(view: EditorView): { width: number; height:
   const longestLineLength = getLongestLineLength(view)
   const estimatedWidth = Math.round(longestLineLength * view.defaultCharacterWidth + NODE_HORIZONTAL_PADDING)
   const domWidth = Math.ceil(Math.max(view.contentDOM.scrollWidth, view.scrollDOM.scrollWidth) + NODE_HORIZONTAL_PADDING)
-  const domHeight = Math.ceil(Math.max(view.contentDOM.scrollHeight, view.scrollDOM.scrollHeight) + NODE_VERTICAL_PADDING)
   const width = Math.min(Math.max(Math.max(estimatedWidth, domWidth), MIN_NODE_WIDTH), MAX_NODE_WIDTH)
-  const height = Math.max(Math.max(Math.round(view.contentHeight + NODE_VERTICAL_PADDING), domHeight), MIN_NODE_HEIGHT)
+  const height = Math.max(Math.ceil(view.contentHeight + NODE_VERTICAL_PADDING), MIN_NODE_HEIGHT)
   return { width, height }
 }
 
@@ -395,7 +394,7 @@ function calculateNodeSizeFromContainer(containerEl: HTMLElement): { width: numb
   if (!contentEl && !scrollerEl) return null
 
   const measuredWidth = Math.max(contentEl?.scrollWidth ?? 0, scrollerEl?.scrollWidth ?? 0)
-  const measuredHeight = Math.max(contentEl?.scrollHeight ?? 0, scrollerEl?.scrollHeight ?? 0)
+  const measuredHeight = contentEl?.scrollHeight ?? 0
 
   return {
     width: Math.min(Math.max(Math.ceil(measuredWidth + NODE_HORIZONTAL_PADDING), MIN_NODE_WIDTH), MAX_NODE_WIDTH),
