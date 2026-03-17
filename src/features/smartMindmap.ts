@@ -11,12 +11,12 @@ const HORIZONTAL_GAP = 220
 const VERTICAL_GAP = 36
 const URL_VISUAL_LIMIT = 36
 const DEFAULT_LINE_HEIGHT = 24
-const PREVIEW_RESYNC_DELAYS = [120, 260, 520]
+const PREVIEW_RESYNC_DELAYS = [0, 32, 120, 260, 520, 1000, 2000]
+const PREVIEW_HEIGHT_BUFFER = 8
 
 const manualNodeSizeOverrides = new Map<string, { width: number; height: number; text: string }>()
 const autoResizingNodeIds = new Set<string>()
 const pendingPreviewResyncs = new Map<string, number[]>()
-const dirtyNodeIds = new Set<string>()
 const pendingManualRelayouts = new Map<string, number>()
 
 type CanvasLeafLike = {
@@ -26,7 +26,6 @@ type CanvasLeafLike = {
 type CanvasEditorInfoLike = MarkdownFileInfo & {
   node?: CanvasNodeLike
   containerEl?: HTMLElement
-  showPreview?: (preview: boolean) => unknown
 }
 
 type CanvasNodeLike = {
@@ -37,9 +36,17 @@ type CanvasNodeLike = {
   height: number
   text?: string
   isEditing?: boolean
+  nodeEl?: HTMLElement
+  getData?: () => Record<string, unknown>
+  setData?: (data: Record<string, unknown>, addHistory?: boolean) => void
   render?: () => void
   child?: {
     text?: string
+    editMode?: {
+      cm?: {
+        dom?: HTMLElement
+      }
+    }
     previewMode?: {
       renderer?: {
         previewEl?: HTMLElement & { isShown?: () => boolean }
@@ -50,6 +57,7 @@ type CanvasNodeLike = {
   moveTo(position: { x: number; y: number }): void
   resize(size: { width: number; height: number }): void
   startEditing(): void
+  setIsEditing?: (editing: boolean, ...args: unknown[]) => void
 }
 
 type CanvasEdgeLike = {
@@ -117,7 +125,13 @@ function addEdge(canvas: CanvasLike, fromNode: CanvasNodeLike, toNode: CanvasNod
   })
 }
 
-function createTextNode(canvas: CanvasLike, x: number, y: number, width: number, height: number): CanvasNodeLike | null {
+function createTextNode(
+  canvas: CanvasLike,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): CanvasNodeLike | null {
   const data = canvas.getData()
   const nodeId = randomId()
   const node: CanvasTextData = {
@@ -188,10 +202,12 @@ function measureTree(tree: TreeNode): void {
   }
 
   tree.children.forEach(measureTree)
-  tree.subtreeWidth = tree.node.width + HORIZONTAL_GAP + Math.max(...tree.children.map((child) => child.subtreeWidth))
+  tree.subtreeWidth =
+    tree.node.width + HORIZONTAL_GAP + Math.max(...tree.children.map((child) => child.subtreeWidth))
   tree.subtreeHeight = Math.max(
     tree.node.height,
-    tree.children.reduce((sum, child) => sum + child.subtreeHeight, 0) + VERTICAL_GAP * (tree.children.length - 1),
+    tree.children.reduce((sum, child) => sum + child.subtreeHeight, 0) +
+      VERTICAL_GAP * (tree.children.length - 1),
   )
 }
 
@@ -201,7 +217,12 @@ function positionTree(tree: TreeNode, left: number, top: number): void {
 
   if (tree.children.length === 0) return
 
-  let childTop = top + (tree.subtreeHeight - (tree.children.reduce((sum, child) => sum + child.subtreeHeight, 0) + VERTICAL_GAP * (tree.children.length - 1))) / 2
+  let childTop =
+    top +
+    (tree.subtreeHeight -
+      (tree.children.reduce((sum, child) => sum + child.subtreeHeight, 0) +
+        VERTICAL_GAP * (tree.children.length - 1))) /
+      2
   const childLeft = left + tree.node.width + HORIZONTAL_GAP
 
   for (const child of tree.children) {
@@ -223,10 +244,14 @@ function relayoutFromRoot(canvas: CanvasLike, root: CanvasNodeLike): void {
   canvas.requestSave()
 }
 
-const debouncedCanvasRelayout = debounce((canvas: CanvasLike, node: CanvasNodeLike) => {
-  const root = getRootNode(canvas, node)
-  relayoutFromRoot(canvas, root)
-}, 150, false)
+const debouncedCanvasRelayout = debounce(
+  (canvas: CanvasLike, node: CanvasNodeLike) => {
+    const root = getRootNode(canvas, node)
+    relayoutFromRoot(canvas, root)
+  },
+  150,
+  false,
+)
 
 function focusNode(canvas: CanvasLike, node: CanvasNodeLike): void {
   canvas.deselectAll()
@@ -252,13 +277,8 @@ function clearManualNodeSizeOverride(node: CanvasNodeLike): void {
 }
 
 function hasActiveManualNodeSizeOverride(node: CanvasNodeLike): boolean {
-  const override = manualNodeSizeOverrides.get(node.id)
-  if (!override) return false
-  if (override.text !== getNodeTextSnapshot(node)) {
-    manualNodeSizeOverrides.delete(node.id)
-    return false
-  }
-  return true
+  void node
+  return false
 }
 
 function clearPendingPreviewResyncs(nodeId: string): void {
@@ -284,18 +304,6 @@ function scheduleFollowupRelayout(node: CanvasNodeLike, canvas: CanvasLike): voi
   }, 180)
 
   pendingManualRelayouts.set(node.id, timer)
-}
-
-function markNodeDirty(node: CanvasNodeLike): void {
-  dirtyNodeIds.add(node.id)
-}
-
-function clearNodeDirty(node: CanvasNodeLike): void {
-  dirtyNodeIds.delete(node.id)
-}
-
-function isNodeDirty(node: CanvasNodeLike): boolean {
-  return dirtyNodeIds.has(node.id)
 }
 
 function patchResizePrototype(
@@ -334,15 +342,47 @@ function patchResizePrototype(
   })
 }
 
-function ensureCanvasNodePrototypePatched(plugin: Plugin, node: CanvasNodeLike | null | undefined): void {
+function patchEditingStatePrototype(plugin: Plugin, target: Record<string, unknown>): void {
+  const original = target.setIsEditing
+  if (typeof original !== "function") return
+  if ((original as { __vaultPilotPatched?: boolean }).__vaultPilotPatched) return
+
+  const wrapped = function (this: CanvasNodeLike, ...args: unknown[]) {
+    const result = (original as (...innerArgs: unknown[]) => unknown).apply(this, args)
+    const editing = typeof args[0] === "boolean" ? args[0] : (this.isEditing ?? false)
+
+    if (this.canvas) {
+      handleNodeEditingStateChange(this, this.canvas, Boolean(editing))
+    }
+
+    return result
+  } as typeof original & { __vaultPilotPatched?: boolean }
+
+  wrapped.__vaultPilotPatched = true
+  target.setIsEditing = wrapped
+
+  plugin.register(() => {
+    if (target.setIsEditing === wrapped) {
+      target.setIsEditing = original
+    }
+  })
+}
+
+function ensureCanvasNodePrototypePatched(
+  plugin: Plugin,
+  node: CanvasNodeLike | null | undefined,
+): void {
   if (!node) return
 
   const nodeProto = Object.getPrototypeOf(node) as Record<string, unknown> | null
   if (nodeProto) {
     patchResizePrototype(plugin, nodeProto, "resize")
+    patchEditingStatePrototype(plugin, nodeProto)
   }
 
-  const parentProto = nodeProto ? (Object.getPrototypeOf(nodeProto) as Record<string, unknown> | null) : null
+  const parentProto = nodeProto
+    ? (Object.getPrototypeOf(nodeProto) as Record<string, unknown> | null)
+    : null
   if (parentProto) {
     patchResizePrototype(plugin, parentProto, "moveAndResize")
   }
@@ -427,30 +467,6 @@ function isCanvasInteractionTarget(view: CanvasViewLike, target: EventTarget | n
   return container ? container.contains(target) : true
 }
 
-function getNodeIdFromElement(nodeEl: HTMLElement): string | null {
-  return nodeEl.dataset.nodeId ?? nodeEl.dataset.id ?? null
-}
-
-function scheduleSelectedNodePreviewResync(plugin: Plugin & { app: App }, target: EventTarget | null): void {
-  if (!(target instanceof HTMLElement)) return
-
-  const nodeEl = target.closest<HTMLElement>(".canvas-node")
-  if (!nodeEl) return
-
-  const view = getActiveCanvasView(plugin.app.workspace.getActiveViewOfType(ItemView))
-  if (!view || !isCanvasInteractionTarget(view, target)) return
-  const nodeId = getNodeIdFromElement(nodeEl)
-  const node = (nodeId ? view.canvas.nodes.get(nodeId) : null) ?? Array.from(view.canvas.selection)[0]
-  if (!node?.canvas || node.isEditing) return
-  if (hasActiveManualNodeSizeOverride(node)) return
-
-  ;[40, 140].forEach((delay) => {
-    window.setTimeout(() => {
-      schedulePrecisePreviewResync(node, node.canvas!, nodeEl)
-    }, delay)
-  })
-}
-
 async function runSmartShortcut(app: App, key: "Tab" | "Enter"): Promise<boolean> {
   const view = getActiveCanvasView(app.workspace.getActiveViewOfType(ItemView))
   if (!view) return false
@@ -481,9 +497,12 @@ export function registerSmartMindmapHotkeys(plugin: Plugin & { app: App }): void
 function getVisualLineLength(text: string): number {
   let length = 0
   for (const char of text) {
-    length += /[\u1100-\u115F\u2E80-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE10-\uFE19\uFE30-\uFE6F\uFF00-\uFF60\uFFE0-\uFFE6]/u.test(char)
-      ? 2
-      : 1
+    length +=
+      /[\u1100-\u115F\u2E80-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE10-\uFE19\uFE30-\uFE6F\uFF00-\uFF60\uFFE0-\uFFE6]/u.test(
+        char,
+      )
+        ? 2
+        : 1
   }
   return length
 }
@@ -493,24 +512,30 @@ function truncateUrlForSizing(url: string): string {
   return `${url.slice(0, URL_VISUAL_LIMIT - 1)}…`
 }
 
-function normalizeTextForSizing(text: string): string {
-  return text
-    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, "")
-    .replace(/\u00A0/g, " ")
-    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, "$1")
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
-    .replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, "$2")
-    .replace(/\[\[([^\]]+)\]\]/g, "$1")
-    .replace(/<((?:https?:\/\/|obsidian:\/\/)[^>\s]+)>/g, (_match, url: string) => truncateUrlForSizing(url))
-    .replace(/(?:https?:\/\/|obsidian:\/\/)[^\s)]+/g, (url) => truncateUrlForSizing(url))
-    .replace(/`([^`]+)`/g, "$1")
+function normalizeTextForSizing(text: string, preserveMarkdown = false): string {
+  let result = text.replace(/[\u200B-\u200D\u2060\uFEFF]/g, "").replace(/\u00A0/g, " ")
+
+  if (!preserveMarkdown) {
+    result = result
+      .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, "$1")
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
+      .replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, "$2")
+      .replace(/\[\[([^\]]+)\]\]/g, "$1")
+      .replace(/<((?:https?:\/\/|obsidian:\/\/)[^>\s]+)>/g, (_match, url: string) =>
+        truncateUrlForSizing(url),
+      )
+      .replace(/(?:https?:\/\/|obsidian:\/\/)[^\s)]+/g, (url) => truncateUrlForSizing(url))
+      .replace(/`([^`]+)`/g, "$1")
+  }
+
+  return result
     .replace(/\t/g, "  ")
     .replace(/[ \t]+$/gm, "")
     .replace(/(?:\r?\n[ \t]*){2,}$/g, "")
 }
 
-function splitVisibleLines(text: string): string[] {
-  const normalized = normalizeTextForSizing(text)
+function splitVisibleLines(text: string, preserveMarkdown = false): string[] {
+  const normalized = normalizeTextForSizing(text, preserveMarkdown)
   const lines = normalized.split(/\r?\n/)
   return lines.length > 0 ? lines : [""]
 }
@@ -538,11 +563,18 @@ function estimateNodeSizeFromText(
   text: string,
   characterWidth: number,
   lineHeight: number,
+  preserveMarkdown = false,
 ): { width: number; height: number } {
-  const lines = splitVisibleLines(text)
-  const longestLineLength = lines.reduce((longest, line) => Math.max(longest, getVisualLineLength(line)), 0)
+  const lines = splitVisibleLines(text, preserveMarkdown)
+  const longestLineLength = lines.reduce(
+    (longest, line) => Math.max(longest, getVisualLineLength(line)),
+    0,
+  )
   const width = Math.min(
-    Math.max(Math.ceil(longestLineLength * characterWidth + NODE_HORIZONTAL_PADDING), MIN_NODE_WIDTH),
+    Math.max(
+      Math.ceil(longestLineLength * characterWidth + NODE_HORIZONTAL_PADDING),
+      MIN_NODE_WIDTH,
+    ),
     MAX_NODE_WIDTH,
   )
 
@@ -553,7 +585,10 @@ function estimateNodeSizeFromText(
     return count + Math.max(1, Math.ceil(visualLength / charsPerLine))
   }, 0)
 
-  const height = Math.max(Math.ceil(wrappedLineCount * lineHeight + NODE_VERTICAL_PADDING), MIN_NODE_HEIGHT)
+  const height = Math.max(
+    Math.ceil(wrappedLineCount * lineHeight + NODE_VERTICAL_PADDING),
+    MIN_NODE_HEIGHT,
+  )
   return { width, height }
 }
 
@@ -567,14 +602,17 @@ function getSuspiciousPreviewHeightLimit(text: string, lineHeight: number): numb
   const lines = getNormalizedVisibleLines(text)
   const lineCount = Math.max(lines.length, 1)
   const blankLineCount = lines.filter((line) => line.trim().length === 0).length
-  return Math.ceil(lineCount * lineHeight + blankLineCount * lineHeight + NODE_VERTICAL_PADDING + lineHeight * 2)
+  return Math.ceil(
+    lineCount * lineHeight + blankLineCount * lineHeight + NODE_VERTICAL_PADDING + lineHeight * 2,
+  )
 }
 
 function calculateNodeSizeFromEditor(view: EditorView): { width: number; height: number } {
   const text = view.state.doc.toString()
   const characterWidth = Math.max(view.defaultCharacterWidth, 8)
-  const lineHeight = (view as EditorView & { defaultLineHeight?: number }).defaultLineHeight ?? DEFAULT_LINE_HEIGHT
-  return estimateNodeSizeFromText(text, characterWidth, lineHeight)
+  const lineHeight =
+    (view as EditorView & { defaultLineHeight?: number }).defaultLineHeight ?? DEFAULT_LINE_HEIGHT
+  return estimateNodeSizeFromText(text, characterWidth, lineHeight, true)
 }
 
 function calculateNodeSizeFromContainer(
@@ -582,9 +620,12 @@ function calculateNodeSizeFromContainer(
   node?: CanvasNodeLike | null,
 ): { width: number; height: number } | null {
   const contentEl = containerEl.querySelector<HTMLElement>(".cm-content")
-  const previewEl = containerEl.querySelector<HTMLElement>(".markdown-preview-view, .markdown-rendered")
+  const previewEl = containerEl.querySelector<HTMLElement>(
+    ".markdown-preview-view, .markdown-rendered",
+  )
   const measureEl = previewEl ?? contentEl ?? containerEl
-  const rawText = previewEl?.innerText ?? contentEl?.innerText ?? node?.text ?? containerEl.innerText
+  const rawText =
+    previewEl?.innerText ?? contentEl?.innerText ?? node?.text ?? containerEl.innerText
 
   if (!rawText.trim()) {
     return {
@@ -593,30 +634,85 @@ function calculateNodeSizeFromContainer(
     }
   }
 
-  return estimateNodeSizeFromText(rawText, getCharacterWidthFromElement(measureEl), getLineHeightFromElement(measureEl))
+  const isEditorMode = Boolean(contentEl && !previewEl)
+  return estimateNodeSizeFromText(
+    rawText,
+    getCharacterWidthFromElement(measureEl),
+    getLineHeightFromElement(measureEl),
+    isEditorMode,
+  )
 }
 
-function findCanvasNodeElement(containerEl: HTMLElement | null | undefined, node: CanvasNodeLike): HTMLElement | null {
+function calculateEditingDomSizeFromContainer(
+  containerEl: HTMLElement,
+): { width: number; height: number } | null {
+  const contentEl = containerEl.querySelector<HTMLElement>(".cm-content")
+  if (!contentEl) return null
+
+  const scrollerEl =
+    containerEl.querySelector<HTMLElement>(".cm-scroller") ??
+    contentEl.closest<HTMLElement>(".cm-scroller")
+  const lineHeight = getLineHeightFromElement(contentEl)
+  const rawWidth = Math.max(contentEl.scrollWidth, scrollerEl?.scrollWidth ?? 0)
+  const rawHeight = Math.max(contentEl.scrollHeight, scrollerEl?.scrollHeight ?? 0)
+
+  return {
+    width: Math.min(
+      Math.max(Math.ceil(rawWidth + NODE_HORIZONTAL_PADDING / 2), MIN_NODE_WIDTH),
+      MAX_NODE_WIDTH,
+    ),
+    height: Math.max(Math.ceil(rawHeight + NODE_VERTICAL_PADDING + lineHeight), MIN_NODE_HEIGHT),
+  }
+}
+
+function getLargestNodeSize(
+  ...sizes: Array<{ width: number; height: number } | null | undefined>
+): { width: number; height: number } | null {
+  const validSizes = sizes.filter(
+    (size): size is { width: number; height: number } => Boolean(size),
+  )
+  if (validSizes.length === 0) return null
+
+  return validSizes.reduce(
+    (largest, size) => ({
+      width: Math.max(largest.width, size.width),
+      height: Math.max(largest.height, size.height),
+    }),
+    validSizes[0],
+  )
+}
+
+function findCanvasNodeElement(
+  containerEl: HTMLElement | null | undefined,
+  node: CanvasNodeLike,
+): HTMLElement | null {
   const closestNodeEl = containerEl?.closest<HTMLElement>(".canvas-node")
   if (closestNodeEl) return closestNodeEl
 
-  const escapedId = typeof CSS !== "undefined" && typeof CSS.escape === "function" ? CSS.escape(node.id) : node.id
+  const escapedId =
+    typeof CSS !== "undefined" && typeof CSS.escape === "function" ? CSS.escape(node.id) : node.id
   return (
     document.querySelector<HTMLElement>(`.canvas-node[data-node-id="${escapedId}"]`) ??
     document.querySelector<HTMLElement>(`.canvas-node[data-id="${escapedId}"]`)
   )
 }
 
-function getPreviewElement(containerEl: HTMLElement | null | undefined, node: CanvasNodeLike): HTMLElement | null {
+function getPreviewElement(
+  containerEl: HTMLElement | null | undefined,
+  node: CanvasNodeLike,
+): HTMLElement | null {
   const internalPreviewEl = node.child?.previewMode?.renderer?.previewEl
   if (internalPreviewEl) {
-    const isShown = typeof internalPreviewEl.isShown === "function" ? internalPreviewEl.isShown() : true
+    const isShown =
+      typeof internalPreviewEl.isShown === "function" ? internalPreviewEl.isShown() : true
     if (isShown) return internalPreviewEl
   }
 
   return (
     containerEl?.querySelector<HTMLElement>(".markdown-preview-view, .markdown-rendered") ??
-    findCanvasNodeElement(containerEl, node)?.querySelector<HTMLElement>(".markdown-preview-view, .markdown-rendered") ??
+    findCanvasNodeElement(containerEl, node)?.querySelector<HTMLElement>(
+      ".markdown-preview-view, .markdown-rendered",
+    ) ??
     null
   )
 }
@@ -662,11 +758,48 @@ function fitNodeHeightToPreview(node: CanvasNodeLike, previewEl: HTMLElement): n
   return Math.max(MIN_NODE_HEIGHT, Math.ceil(nextHeight))
 }
 
-function getEditingStableSize(node: CanvasNodeLike, size: { width: number; height: number }): { width: number; height: number } {
+function measureNodeHeightFromRenderedPreview(
+  node: CanvasNodeLike,
+  previewEl: HTMLElement,
+): number | null {
+  const originalInlineHeight = previewEl.style.height
+  const baseClientHeight = previewEl.clientHeight
+
+  try {
+    previewEl.style.height = "min-content"
+    const renderedHeight = Math.max(previewEl.clientHeight, previewEl.scrollHeight)
+    if (renderedHeight <= 0) return null
+
+    const chromeHeight = Math.max(node.height - baseClientHeight, NODE_VERTICAL_PADDING)
+    return Math.max(
+      MIN_NODE_HEIGHT,
+      Math.ceil(renderedHeight + chromeHeight + PREVIEW_HEIGHT_BUFFER),
+    )
+  } finally {
+    previewEl.style.height = originalInlineHeight
+  }
+}
+
+function getEditingStableSize(
+  node: CanvasNodeLike,
+  size: { width: number; height: number },
+): { width: number; height: number } {
   return {
     width: Math.max(node.width, size.width),
     height: Math.max(node.height, size.height),
   }
+}
+
+function resolveNodeContainerElement(
+  containerEl: HTMLElement | null | undefined,
+  node: CanvasNodeLike,
+): HTMLElement | null {
+  return findCanvasNodeElement(containerEl, node) ?? containerEl ?? node.nodeEl ?? null
+}
+
+function getCurrentEditingContainerElement(node: CanvasNodeLike): HTMLElement | null {
+  const editorDom = node.child?.editMode?.cm?.dom
+  return resolveNodeContainerElement(editorDom ?? null, node)
 }
 
 function schedulePrecisePreviewResync(
@@ -682,39 +815,58 @@ function schedulePrecisePreviewResync(
   const delay = PREVIEW_RESYNC_DELAYS[Math.min(attempt, PREVIEW_RESYNC_DELAYS.length - 1)]
   const timer = window.setTimeout(() => {
     try {
-      if (!node.canvas || hasActiveManualNodeSizeOverride(node)) return
+      if (!node.canvas || node.isEditing || hasActiveManualNodeSizeOverride(node)) return
 
-      const baseSize = containerEl ? calculateNodeSizeFromContainer(containerEl, node) : null
+      node.render?.()
+      canvas.requestFrame()
+
+      const effectiveContainerEl = resolveNodeContainerElement(containerEl, node)
+      const baseSize = effectiveContainerEl
+        ? calculateNodeSizeFromContainer(effectiveContainerEl, node)
+        : null
+
       if (baseSize) {
         syncNodeSize(node, canvas, baseSize)
       }
 
-      const previewEl = getPreviewElement(containerEl, node)
-      if (isPreviewElementReady(previewEl)) {
-        const fittedHeight = fitNodeHeightToPreview(node, previewEl)
-        const rawText = previewEl.innerText || node.text || ""
-        const lineHeight = getLineHeightFromElement(previewEl)
-        const suspiciousHeightLimit = getSuspiciousPreviewHeightLimit(rawText, lineHeight)
-        const boundedHeight = fittedHeight !== null ? Math.min(fittedHeight, suspiciousHeightLimit) : null
-
-        if (boundedHeight !== null && boundedHeight !== node.height) {
-          syncNodeSize(node, canvas, { width: node.width, height: boundedHeight })
-        } else if (boundedHeight !== null) {
-          debouncedCanvasRelayout(canvas, node)
+      const previewEl = getPreviewElement(effectiveContainerEl, node)
+      if (!isPreviewElementReady(previewEl)) {
+        if (attempt + 1 < PREVIEW_RESYNC_DELAYS.length) {
+          schedulePrecisePreviewResync(node, canvas, effectiveContainerEl, attempt + 1)
+        } else {
+          pendingPreviewResyncs.delete(node.id)
         }
-        clearNodeDirty(node)
-        clearPendingPreviewResyncs(node.id)
         return
       }
 
-      if (attempt + 1 < PREVIEW_RESYNC_DELAYS.length) {
-        schedulePrecisePreviewResync(node, canvas, containerEl, attempt + 1)
-        return
+      const fittedHeight = fitNodeHeightToPreview(node, previewEl)
+      const renderedPreviewHeight = measureNodeHeightFromRenderedPreview(node, previewEl)
+      const rawText = previewEl.innerText || node.text || ""
+      const lineHeight = getLineHeightFromElement(previewEl)
+      const suspiciousHeightLimit = getSuspiciousPreviewHeightLimit(rawText, lineHeight)
+      const boundedHeight =
+        fittedHeight !== null
+          ? Math.min(fittedHeight, suspiciousHeightLimit + PREVIEW_HEIGHT_BUFFER)
+          : null
+      const finalHeight = Math.max(
+        renderedPreviewHeight ?? MIN_NODE_HEIGHT,
+        boundedHeight ?? MIN_NODE_HEIGHT,
+      )
+
+      if (renderedPreviewHeight !== null || boundedHeight !== null) {
+        syncNodeSize(node, canvas, {
+          width: baseSize?.width ?? node.width,
+          height: finalHeight,
+        })
+      } else if (baseSize) {
+        syncNodeSize(node, canvas, baseSize)
+      } else {
+        debouncedCanvasRelayout(canvas, node)
       }
+      clearPendingPreviewResyncs(node.id)
     } finally {
       if (attempt + 1 >= PREVIEW_RESYNC_DELAYS.length) {
         pendingPreviewResyncs.delete(node.id)
-        clearNodeDirty(node)
       }
     }
   }, delay)
@@ -724,14 +876,32 @@ function schedulePrecisePreviewResync(
   pendingPreviewResyncs.set(node.id, timers)
 }
 
-function syncNodeSize(node: CanvasNodeLike, canvas: CanvasLike, size: { width: number; height: number } | null): void {
+function syncNodeSize(
+  node: CanvasNodeLike,
+  canvas: CanvasLike,
+  size: { width: number; height: number } | null,
+): void {
   if (!size) return
-  if (hasActiveManualNodeSizeOverride(node)) return
   if (node.width === size.width && node.height === size.height) return
   ensureCanvasNodePrototypePatched({ register: () => undefined } as unknown as Plugin, node)
   autoResizingNodeIds.add(node.id)
   try {
     node.resize(size)
+    const nodeData = node.getData?.()
+    if (nodeData && typeof node.setData === "function") {
+      node.setData(
+        {
+          ...nodeData,
+          width: size.width,
+          height: size.height,
+        },
+        false,
+      )
+      node.render?.()
+    }
+    node.render?.()
+    canvas.requestFrame()
+    canvas.requestSave()
   } finally {
     autoResizingNodeIds.delete(node.id)
   }
@@ -747,99 +917,84 @@ function syncNodeSizeDuringEditing(
   syncNodeSize(node, canvas, getEditingStableSize(node, size))
 }
 
-function patchActiveEditorPreview(plugin: Plugin & { app: App }): void {
-  const activeEditor = plugin.app.workspace.activeEditor as CanvasEditorInfoLike | null
-  if (!activeEditor?.node || !activeEditor.containerEl) return
+function handleNodeEditingStateChange(
+  node: CanvasNodeLike,
+  canvas: CanvasLike,
+  editing: boolean,
+): void {
+  clearPendingPreviewResyncs(node.id)
 
-  const proto = Object.getPrototypeOf(activeEditor) as Record<string, unknown> | null
-  if (!proto) return
-  const original = proto.showPreview
-  if (typeof original !== "function") return
-  if ((original as { __vaultPilotPatched?: boolean }).__vaultPilotPatched) return
+  if (editing) {
+    window.setTimeout(() => {
+      if (!node.canvas || !(node.isEditing ?? false)) return
+      const containerEl = getCurrentEditingContainerElement(node)
+      const size = getLargestNodeSize(
+        containerEl ? calculateNodeSizeFromContainer(containerEl, node) : null,
+        containerEl ? calculateEditingDomSizeFromContainer(containerEl) : null,
+      )
+      syncNodeSizeDuringEditing(node, canvas, size)
+    }, 0)
+    return
+  }
 
-  const wrapped = function (this: CanvasEditorInfoLike, preview: boolean) {
-    const result = (original as (flag: boolean) => unknown).call(this, preview)
-    if (preview && this.node?.canvas && this.containerEl) {
-      window.setTimeout(() => {
-        const size = calculateNodeSizeFromContainer(this.containerEl!, this.node)
-        syncNodeSize(this.node!, this.node!.canvas!, size)
-        schedulePrecisePreviewResync(this.node!, this.node!.canvas!, this.containerEl!)
-      }, 0)
-    }
-    return result
-  } as typeof original & { __vaultPilotPatched?: boolean }
-
-  wrapped.__vaultPilotPatched = true
-  proto.showPreview = wrapped
-
-  plugin.register(() => {
-    if (proto.showPreview === wrapped) {
-      proto.showPreview = original
-    }
+  clearManualNodeSizeOverride(node)
+  ;[0, 24, 80].forEach((delay) => {
+    window.setTimeout(() => {
+      if (!node.canvas || node.isEditing) return
+      node.render?.()
+      canvas.requestFrame()
+      schedulePrecisePreviewResync(node, canvas, resolveNodeContainerElement(null, node))
+    }, delay)
   })
 }
 
 export function registerSmartMindmapAutoResize(plugin: Plugin & { app: App }): void {
   patchExistingCanvasNodes(plugin)
-  patchActiveEditorPreview(plugin)
-  plugin.registerEvent(plugin.app.workspace.on("layout-change", () => {
-    patchExistingCanvasNodes(plugin)
-    patchActiveEditorPreview(plugin)
-  }))
-  plugin.registerEvent(plugin.app.workspace.on("active-leaf-change", () => {
-    patchExistingCanvasNodes(plugin)
-    patchActiveEditorPreview(plugin)
-  }))
+  plugin.registerEvent(
+    plugin.app.workspace.on("layout-change", () => {
+      patchExistingCanvasNodes(plugin)
+    }),
+  )
+  plugin.registerEvent(
+    plugin.app.workspace.on("active-leaf-change", () => {
+      patchExistingCanvasNodes(plugin)
+    }),
+  )
   plugin.registerDomEvent(document, "mouseup", (event: MouseEvent) => {
-    if (isEditableTarget(event.target)) return
-    scheduleSelectedNodePreviewResync(plugin, event.target)
-  })
-  plugin.registerEvent(plugin.app.workspace.on("editor-paste", (_evt, _editor, info) => {
-    const editorInfo = info as CanvasEditorInfoLike
-    if (!editorInfo.node?.canvas || !editorInfo.containerEl) return
-    clearPendingPreviewResyncs(editorInfo.node.id)
-    window.setTimeout(() => {
-      markNodeDirty(editorInfo.node!)
-      clearManualNodeSizeOverride(editorInfo.node!)
-      syncNodeSizeDuringEditing(
-        editorInfo.node!,
-        editorInfo.node!.canvas!,
-        calculateNodeSizeFromContainer(editorInfo.containerEl!, editorInfo.node),
-      )
-    }, 30)
-  }))
-  plugin.registerEvent(plugin.app.workspace.on("editor-change", (_editor, info) => {
-    const editorInfo = info as CanvasEditorInfoLike
-    if (!editorInfo.node?.canvas || !editorInfo.containerEl) return
-    patchActiveEditorPreview(plugin)
-    clearPendingPreviewResyncs(editorInfo.node.id)
-    window.setTimeout(() => {
-      markNodeDirty(editorInfo.node!)
-      clearManualNodeSizeOverride(editorInfo.node!)
-      syncNodeSizeDuringEditing(
-        editorInfo.node!,
-        editorInfo.node!.canvas!,
-        calculateNodeSizeFromContainer(editorInfo.containerEl!, editorInfo.node),
-      )
-    }, 10)
-  }))
+    const view = getActiveCanvasView(plugin.app.workspace.getActiveViewOfType(ItemView))
+    if (!view || !isCanvasInteractionTarget(view, event.target)) return
 
+    const target = event.target instanceof HTMLElement ? event.target : null
+    const nodeEl = target?.closest<HTMLElement>(".canvas-node")
+    if (!nodeEl) return
+
+    const node = Array.from(view.canvas.selection)[0]
+    if (!node?.canvas || node.isEditing) return
+
+    node.render?.()
+    view.canvas.requestFrame()
+    schedulePrecisePreviewResync(node, view.canvas, nodeEl)
+  })
   plugin.registerEditorExtension(
     EditorView.updateListener.of((update) => {
       if (!update.docChanged) return
 
-      const editorInfo = update.state.field(editorInfoField) as unknown as {
-        node?: CanvasNodeLike
-      }
+      const editorInfo = update.state.field(editorInfoField) as unknown as CanvasEditorInfoLike
       const node = editorInfo?.node
       const canvas = node?.canvas
 
       if (!node || !canvas || typeof node.resize !== "function") return
 
+      ensureCanvasNodePrototypePatched(plugin, node)
       clearPendingPreviewResyncs(node.id)
-      markNodeDirty(node)
       clearManualNodeSizeOverride(node)
-      const nextSize = calculateNodeSizeFromEditor(update.view)
+      const containerEl =
+        editorInfo.containerEl ?? getCurrentEditingContainerElement(node) ?? update.view.dom
+      const nextSize = getLargestNodeSize(
+        calculateNodeSizeFromEditor(update.view),
+        calculateNodeSizeFromContainer(containerEl, node),
+        calculateEditingDomSizeFromContainer(containerEl),
+      )
       syncNodeSizeDuringEditing(node, canvas, nextSize)
     }),
   )

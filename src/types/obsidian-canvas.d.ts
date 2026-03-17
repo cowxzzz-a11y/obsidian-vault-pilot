@@ -29,6 +29,8 @@ declare module "obsidian" {
     width: number
     height: number
     isEditing?: boolean
+    getData?(): Record<string, unknown>
+    setData?(data: Record<string, unknown>, addHistory?: boolean): void
     moveTo(position: { x: number; y: number }): void
     startEditing(): void
   }
