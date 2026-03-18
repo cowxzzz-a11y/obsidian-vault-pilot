@@ -52,7 +52,7 @@ function randomId(length = 16): string {
 export function buildNasVideoHtml(url: string, posterUrl?: string | null): string {
   const safeUrl = escapeHtmlAttribute(url)
   const posterAttr = posterUrl ? ` poster="${escapeHtmlAttribute(posterUrl)}"` : ""
-  return `<div style="width:100%; height:100%; display:flex; align-items:center; justify-content:center; padding:8px; box-sizing:border-box;"><video controls playsinline preload="metadata"${posterAttr} style="display:block; width:100%; height:100%; border-radius:8px; background:#000; object-fit:contain;" src="${safeUrl}"></video></div>`
+  return `<div data-vault-pilot-node="nas-video" style="width:100%; height:100%; display:flex; align-items:center; justify-content:center; padding:8px; box-sizing:border-box;"><video controls playsinline preload="metadata"${posterAttr} style="display:block; width:100%; height:100%; border-radius:8px; background:#000; object-fit:contain;" src="${safeUrl}"></video></div>`
 }
 
 export function insertHtmlIntoMarkdown(editor: Editor, html: string): void {

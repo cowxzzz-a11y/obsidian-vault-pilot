@@ -94,6 +94,14 @@ type TreeNode = {
   y: number
 }
 
+function isNasVideoCanvasNode(node: CanvasNodeLike): boolean {
+  const text = node.text ?? ""
+  return (
+    text.includes('data-vault-pilot-node="nas-video"') ||
+    (text.includes("<video") && text.includes("src="))
+  )
+}
+
 function randomId(length = 16): string {
   const chars = "0123456789abcdef"
   let result = ""
@@ -808,6 +816,7 @@ function schedulePrecisePreviewResync(
   containerEl: HTMLElement | null | undefined,
   attempt = 0,
 ): void {
+  if (isNasVideoCanvasNode(node)) return
   if (attempt === 0) {
     clearPendingPreviewResyncs(node.id)
   }
@@ -913,6 +922,7 @@ function syncNodeSizeDuringEditing(
   canvas: CanvasLike,
   size: { width: number; height: number } | null,
 ): void {
+  if (isNasVideoCanvasNode(node)) return
   if (!size) return
   syncNodeSize(node, canvas, getEditingStableSize(node, size))
 }
@@ -922,6 +932,7 @@ function handleNodeEditingStateChange(
   canvas: CanvasLike,
   editing: boolean,
 ): void {
+  if (isNasVideoCanvasNode(node)) return
   clearPendingPreviewResyncs(node.id)
 
   if (editing) {
@@ -970,6 +981,7 @@ export function registerSmartMindmapAutoResize(plugin: Plugin & { app: App }): v
 
     const node = Array.from(view.canvas.selection)[0]
     if (!node?.canvas || node.isEditing) return
+    if (isNasVideoCanvasNode(node)) return
 
     node.render?.()
     view.canvas.requestFrame()
@@ -984,6 +996,7 @@ export function registerSmartMindmapAutoResize(plugin: Plugin & { app: App }): v
       const canvas = node?.canvas
 
       if (!node || !canvas || typeof node.resize !== "function") return
+      if (isNasVideoCanvasNode(node)) return
 
       ensureCanvasNodePrototypePatched(plugin, node)
       clearPendingPreviewResyncs(node.id)
