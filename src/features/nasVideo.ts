@@ -6,6 +6,16 @@ export type VideoDimensions = {
   height: number
 }
 
+type VideoSource =
+  | {
+      kind: "direct"
+      url: string
+    }
+  | {
+      kind: "bilibili"
+      embedUrl: string
+    }
+
 type CanvasNodeLike = {
   id: string
   x: number
@@ -49,10 +59,114 @@ function randomId(length = 16): string {
   return result
 }
 
-export function buildNasVideoHtml(url: string, posterUrl?: string | null): string {
+function buildDirectVideoHtml(url: string, posterUrl?: string | null): string {
   const safeUrl = escapeHtmlAttribute(url)
   const posterAttr = posterUrl ? ` poster="${escapeHtmlAttribute(posterUrl)}"` : ""
-  return `<div data-vault-pilot-node="nas-video" style="width:100%; height:100%; display:flex; align-items:center; justify-content:center; padding:8px; box-sizing:border-box;"><video controls playsinline preload="metadata"${posterAttr} style="display:block; width:100%; height:100%; border-radius:8px; background:#000; object-fit:contain;" src="${safeUrl}"></video></div>`
+  return `<div data-vault-pilot-node="video-direct" style="width:100%; height:100%; display:flex; align-items:center; justify-content:center; padding:8px; box-sizing:border-box;"><video controls playsinline preload="metadata"${posterAttr} style="display:block; width:100%; height:100%; border-radius:8px; background:#000; object-fit:contain;" src="${safeUrl}"></video></div>`
+}
+
+function buildBilibiliEmbedHtml(embedUrl: string): string {
+  const safeUrl = escapeHtmlAttribute(embedUrl)
+  return `<div data-vault-pilot-node="video-bilibili" style="position:relative; width:100%; padding-bottom:56.25%;"><iframe src="${safeUrl}" style="position:absolute; inset:0; width:100%; height:100%; border:0;" scrolling="no" allowfullscreen="true"></iframe></div>`
+}
+
+function parsePositiveInteger(value: string | null): number | null {
+  if (!value) return null
+
+  const parsed = Number.parseInt(value, 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+}
+
+function buildBilibiliPlayerUrl(
+  identifier: { bvid: string } | { aid: string },
+  page: number | null,
+): string {
+  const url = new URL("https://player.bilibili.com/player.html")
+
+  if ("bvid" in identifier) {
+    url.searchParams.set("bvid", identifier.bvid)
+  } else {
+    url.searchParams.set("aid", identifier.aid)
+  }
+
+  if (page && page > 1) {
+    url.searchParams.set("page", String(page))
+  }
+
+  url.searchParams.set("danmaku", "false")
+  return url.toString()
+}
+
+function resolveBilibiliSource(input: string): VideoSource | null {
+  try {
+    const url = new URL(input)
+    const hostname = url.hostname.toLowerCase()
+
+    if (hostname === "player.bilibili.com" && url.pathname.startsWith("/player.html")) {
+      return {
+        kind: "bilibili",
+        embedUrl: url.toString(),
+      }
+    }
+
+    if (!hostname.endsWith("bilibili.com")) {
+      return null
+    }
+
+    const match = url.pathname.match(/\/video\/((?:BV[0-9A-Za-z]+)|(?:av\d+))/i)
+    if (!match) {
+      return null
+    }
+
+    const videoId = match[1]
+    const page = parsePositiveInteger(url.searchParams.get("p"))
+
+    if (/^BV/i.test(videoId)) {
+      return {
+        kind: "bilibili",
+        embedUrl: buildBilibiliPlayerUrl({ bvid: videoId }, page),
+      }
+    }
+
+    return {
+      kind: "bilibili",
+      embedUrl: buildBilibiliPlayerUrl({ aid: videoId.replace(/^av/i, "") }, page),
+    }
+  } catch {
+    return null
+  }
+}
+
+function resolveVideoSource(input: string): VideoSource {
+  const trimmedInput = input.trim()
+  return resolveBilibiliSource(trimmedInput) ?? { kind: "direct", url: trimmedInput }
+}
+
+export async function prepareVideoEmbed(
+  input: string,
+  extensions: string[],
+): Promise<{
+  html: string
+  dimensions: VideoDimensions | null
+}> {
+  const source = resolveVideoSource(input)
+
+  if (source.kind === "bilibili") {
+    return {
+      html: buildBilibiliEmbedHtml(source.embedUrl),
+      dimensions: null,
+    }
+  }
+
+  const [posterUrl, videoDimensions] = await Promise.all([
+    detectPosterUrl(source.url, extensions),
+    getVideoDimensions(source.url),
+  ])
+
+  return {
+    html: buildDirectVideoHtml(source.url, posterUrl),
+    dimensions: videoDimensions,
+  }
 }
 
 export function insertHtmlIntoMarkdown(editor: Editor, html: string): void {

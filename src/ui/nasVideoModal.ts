@@ -12,11 +12,11 @@ class NasVideoModal extends Modal {
 
   onOpen(): void {
     const { contentEl } = this
-    this.setTitle("插入 NAS 视频")
+    this.setTitle("插入视频链接")
 
     new Setting(contentEl)
       .setName("视频链接")
-      .setDesc("粘贴 NAS / Alist 视频直链，插件会自动尝试 covers 目录中的封面。")
+      .setDesc("支持 alist 直链和 B 站链接")
       .addText((text) => {
         text
           .setPlaceholder("https://...")

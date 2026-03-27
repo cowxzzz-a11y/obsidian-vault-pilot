@@ -42,7 +42,7 @@ export class VaultPilotSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("封面后缀优先级")
-      .setDesc("插入 NAS 视频时，会依次尝试 covers 下的这些后缀。")
+      .setDesc("插入 Alist / NAS 视频直链时，会依次尝试 covers 下的这些后缀。")
       .addText((text) =>
         text
           .setPlaceholder("png,jpg,webp")
