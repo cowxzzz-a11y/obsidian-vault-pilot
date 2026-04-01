@@ -102,6 +102,48 @@ function isNasVideoCanvasNode(node: CanvasNodeLike): boolean {
   )
 }
 
+function findCanvasNodeImageElement(
+  containerEl: HTMLElement | null | undefined,
+  node: CanvasNodeLike,
+): HTMLImageElement | null {
+  return (
+    containerEl?.querySelector<HTMLImageElement>("img") ??
+    findCanvasNodeElement(containerEl, node)?.querySelector<HTMLImageElement>("img") ??
+    node.nodeEl?.querySelector<HTMLImageElement>("img") ??
+    null
+  )
+}
+
+function isImageElementReady(imageEl: HTMLImageElement | null): imageEl is HTMLImageElement {
+  if (!imageEl || !imageEl.isConnected) return false
+  if (imageEl.getClientRects().length === 0) return false
+  return imageEl.naturalWidth > 0 && imageEl.naturalHeight > 0
+}
+
+function calculateImageNodeSize(
+  node: CanvasNodeLike,
+  imageEl: HTMLImageElement,
+): { width: number; height: number } | null {
+  const aspectRatio = imageEl.naturalWidth / imageEl.naturalHeight
+  if (!Number.isFinite(aspectRatio) || aspectRatio <= 0) return null
+
+  const imageWidth = Math.max(imageEl.clientWidth, Math.round(imageEl.getBoundingClientRect().width))
+  const imageHeight = Math.max(
+    imageEl.clientHeight,
+    Math.round(imageEl.getBoundingClientRect().height),
+  )
+
+  // Keep the node's existing chrome and only correct the content box back to the image ratio.
+  const chromeWidth = Math.max(0, node.width - imageWidth)
+  const chromeHeight = Math.max(0, node.height - imageHeight)
+  const contentWidth = Math.max(MIN_NODE_WIDTH, node.width - chromeWidth)
+
+  return {
+    width: Math.max(MIN_NODE_WIDTH, Math.round(contentWidth + chromeWidth)),
+    height: Math.max(MIN_NODE_HEIGHT, Math.round(contentWidth / aspectRatio + chromeHeight)),
+  }
+}
+
 function randomId(length = 16): string {
   const chars = "0123456789abcdef"
   let result = ""
@@ -830,6 +872,23 @@ function schedulePrecisePreviewResync(
       canvas.requestFrame()
 
       const effectiveContainerEl = resolveNodeContainerElement(containerEl, node)
+      const imageEl = findCanvasNodeImageElement(effectiveContainerEl, node)
+
+      if (imageEl) {
+        if (!isImageElementReady(imageEl)) {
+          if (attempt + 1 < PREVIEW_RESYNC_DELAYS.length) {
+            schedulePrecisePreviewResync(node, canvas, effectiveContainerEl, attempt + 1)
+          } else {
+            pendingPreviewResyncs.delete(node.id)
+          }
+          return
+        }
+
+        syncNodeSize(node, canvas, calculateImageNodeSize(node, imageEl))
+        clearPendingPreviewResyncs(node.id)
+        return
+      }
+
       const baseSize = effectiveContainerEl
         ? calculateNodeSizeFromContainer(effectiveContainerEl, node)
         : null
@@ -986,6 +1045,28 @@ export function registerSmartMindmapAutoResize(plugin: Plugin & { app: App }): v
     node.render?.()
     view.canvas.requestFrame()
     schedulePrecisePreviewResync(node, view.canvas, nodeEl)
+  })
+  plugin.registerDomEvent(document, "paste", (event: ClipboardEvent) => {
+    const hasImageData = Array.from(event.clipboardData?.items ?? []).some((item) =>
+      item.type.startsWith("image/"),
+    )
+    if (!hasImageData) return
+    if (isEditableTarget(event.target)) return
+
+    const view = getActiveCanvasView(plugin.app.workspace.getActiveViewOfType(ItemView))
+    if (!view) return
+
+    ;[0, 40, 120, 260].forEach((delay) => {
+      window.setTimeout(() => {
+        const selectedNodes = Array.from(view.canvas.selection)
+        for (const node of selectedNodes) {
+          if (!node.canvas || node.isEditing || isNasVideoCanvasNode(node)) continue
+          node.render?.()
+          view.canvas.requestFrame()
+          schedulePrecisePreviewResync(node, view.canvas, resolveNodeContainerElement(null, node))
+        }
+      }, delay)
+    })
   })
   plugin.registerEditorExtension(
     EditorView.updateListener.of((update) => {
