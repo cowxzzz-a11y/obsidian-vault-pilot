@@ -447,7 +447,7 @@ function patchExistingCanvasNodes(plugin: Plugin & { app: App }): void {
   }
 }
 
-export async function createSmartChildNode(canvasView: CanvasViewLike): Promise<boolean> {
+export function createSmartChildNode(canvasView: CanvasViewLike): boolean {
   const canvas = canvasView.canvas
   if (canvas.readonly || canvas.selection.size !== 1) return false
 
@@ -474,7 +474,7 @@ export async function createSmartChildNode(canvasView: CanvasViewLike): Promise<
   return true
 }
 
-export async function createSmartSiblingNode(canvasView: CanvasViewLike): Promise<boolean> {
+export function createSmartSiblingNode(canvasView: CanvasViewLike): boolean {
   const canvas = canvasView.canvas
   if (canvas.readonly || canvas.selection.size !== 1) return false
 
@@ -517,7 +517,7 @@ function isCanvasInteractionTarget(view: CanvasViewLike, target: EventTarget | n
   return container ? container.contains(target) : true
 }
 
-async function runSmartShortcut(app: App, key: "Tab" | "Enter"): Promise<boolean> {
+function runSmartShortcut(app: App, key: "Tab" | "Enter"): boolean {
   const view = getActiveCanvasView(app.workspace.getActiveViewOfType(ItemView))
   if (!view) return false
 
@@ -660,8 +660,7 @@ function getSuspiciousPreviewHeightLimit(text: string, lineHeight: number): numb
 function calculateNodeSizeFromEditor(view: EditorView): { width: number; height: number } {
   const text = view.state.doc.toString()
   const characterWidth = Math.max(view.defaultCharacterWidth, 8)
-  const lineHeight =
-    (view as EditorView & { defaultLineHeight?: number }).defaultLineHeight ?? DEFAULT_LINE_HEIGHT
+  const lineHeight = view.defaultLineHeight ?? DEFAULT_LINE_HEIGHT
   return estimateNodeSizeFromText(text, characterWidth, lineHeight, true)
 }
 
@@ -773,18 +772,26 @@ function isPreviewElementReady(previewEl: HTMLElement | null): previewEl is HTML
   return previewEl.scrollHeight > 0 || previewEl.clientHeight > 0
 }
 
+function restoreStyleAttribute(element: HTMLElement, styleAttribute: string | null): void {
+  if (styleAttribute === null) {
+    element.removeAttribute("style")
+  } else {
+    element.setAttribute("style", styleAttribute)
+  }
+}
+
 function fitNodeHeightToPreview(node: CanvasNodeLike, previewEl: HTMLElement): number | null {
   if (!node.canvas) return null
 
-  const originalInlineHeight = previewEl.style.height
+  const originalStyleAttribute = previewEl.getAttribute("style")
   let nextHeight = node.height
 
   try {
     for (let attempt = 0; attempt < 10; attempt++) {
       const clientHeight = previewEl.clientHeight
-      previewEl.style.height = "1px"
+      previewEl.setCssProps({ height: "1px" })
       const scrollHeight = previewEl.scrollHeight
-      previewEl.style.height = originalInlineHeight
+      restoreStyleAttribute(previewEl, originalStyleAttribute)
 
       const distance = scrollHeight - clientHeight + 1
       if (Math.abs(distance) < 1) {
@@ -802,7 +809,7 @@ function fitNodeHeightToPreview(node: CanvasNodeLike, previewEl: HTMLElement): n
       }
     }
   } finally {
-    previewEl.style.height = originalInlineHeight
+    restoreStyleAttribute(previewEl, originalStyleAttribute)
   }
 
   return Math.max(MIN_NODE_HEIGHT, Math.ceil(nextHeight))
@@ -812,11 +819,11 @@ function measureNodeHeightFromRenderedPreview(
   node: CanvasNodeLike,
   previewEl: HTMLElement,
 ): number | null {
-  const originalInlineHeight = previewEl.style.height
+  const originalStyleAttribute = previewEl.getAttribute("style")
   const baseClientHeight = previewEl.clientHeight
 
   try {
-    previewEl.style.height = "min-content"
+    previewEl.setCssProps({ height: "min-content" })
     const renderedHeight = Math.max(previewEl.clientHeight, previewEl.scrollHeight)
     if (renderedHeight <= 0) return null
 
@@ -826,7 +833,7 @@ function measureNodeHeightFromRenderedPreview(
       Math.ceil(renderedHeight + chromeHeight + PREVIEW_HEIGHT_BUFFER),
     )
   } finally {
-    previewEl.style.height = originalInlineHeight
+    restoreStyleAttribute(previewEl, originalStyleAttribute)
   }
 }
 

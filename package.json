@@ -1,6 +1,6 @@
 {
   "name": "obsidian-vault-pilot",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Vault Pilot for Obsidian",
   "main": "main.js",
   "scripts": {

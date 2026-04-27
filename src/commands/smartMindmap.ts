@@ -5,34 +5,34 @@ import { createSmartChildNode, createSmartSiblingNode, getActiveCanvasView } fro
 export function registerCanvasCommands(plugin: VaultPilotPlugin) {
   plugin.addCommand({
     id: "smart-create-canvas-child-node",
-    name: "Canvas：智能创建子节点",
-    callback: async () => {
+    name: "Canvas: create smart child node",
+    callback: () => {
       const view = getActiveCanvasView(plugin.app.workspace.getActiveViewOfType(ItemView))
       if (!view) {
-        new Notice("Vault Pilot：请先打开 Canvas 白板")
+        new Notice("Vault Pilot: open a Canvas first")
         return
       }
 
-      const created = await createSmartChildNode(view)
+      const created = createSmartChildNode(view)
       if (!created) {
-        new Notice("Vault Pilot：请先选中一个非编辑状态的节点")
+        new Notice("Vault Pilot: select one node that is not being edited")
       }
     },
   })
 
   plugin.addCommand({
     id: "smart-create-canvas-sibling-node",
-    name: "Canvas：智能创建兄弟节点",
-    callback: async () => {
+    name: "Canvas: create smart sibling node",
+    callback: () => {
       const view = getActiveCanvasView(plugin.app.workspace.getActiveViewOfType(ItemView))
       if (!view) {
-        new Notice("Vault Pilot：请先打开 Canvas 白板")
+        new Notice("Vault Pilot: open a Canvas first")
         return
       }
 
-      const created = await createSmartSiblingNode(view)
+      const created = createSmartSiblingNode(view)
       if (!created) {
-        new Notice("Vault Pilot：兄弟节点需要当前选中的是非根节点")
+        new Notice("Vault Pilot: select a non-root node first")
       }
     },
   })

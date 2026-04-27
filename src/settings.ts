@@ -2,15 +2,11 @@ import { App, PluginSettingTab, Setting } from "obsidian"
 import VaultPilotPlugin from "./main"
 
 export interface VaultPilotSettings {
-  gitRepoPath: string
   nasPosterExtensions: string[]
-  gitCommitPrefix: string
 }
 
 export const DEFAULT_SETTINGS: VaultPilotSettings = {
-  gitRepoPath: "",
   nasPosterExtensions: ["png", "jpg", "webp"],
-  gitCommitPrefix: "chore: vault update",
 }
 
 export class VaultPilotSettingTab extends PluginSettingTab {
@@ -25,24 +21,11 @@ export class VaultPilotSettingTab extends PluginSettingTab {
     const { containerEl } = this
     containerEl.empty()
 
-    containerEl.createEl("h2", { text: "Vault Pilot" })
+    new Setting(containerEl).setName("Vault Pilot").setHeading()
 
     new Setting(containerEl)
-      .setName("Git 仓库路径")
-      .setDesc("留空时默认使用当前 Obsidian 仓库根目录。")
-      .addText((text) =>
-        text
-          .setPlaceholder("例如 D:\\Document\\quartz_obsidian")
-          .setValue(this.plugin.settings.gitRepoPath)
-          .onChange(async (value) => {
-            this.plugin.settings.gitRepoPath = value.trim()
-            await this.plugin.saveSettings()
-          }),
-      )
-
-    new Setting(containerEl)
-      .setName("封面后缀优先级")
-      .setDesc("插入 Alist / NAS 视频直链时，会依次尝试 covers 下的这些后缀。")
+      .setName("Poster extension priority")
+      .setDesc("When inserting Alist or NAS video links, Vault Pilot checks these extensions under covers.")
       .addText((text) =>
         text
           .setPlaceholder("png,jpg,webp")
@@ -52,19 +35,6 @@ export class VaultPilotSettingTab extends PluginSettingTab {
               .split(",")
               .map((item) => item.trim().replace(/^\./, ""))
               .filter(Boolean)
-            await this.plugin.saveSettings()
-          }),
-      )
-
-    new Setting(containerEl)
-      .setName("Git 提交前缀")
-      .setDesc("一键推送时会自动拼接时间，形成最终提交信息。")
-      .addText((text) =>
-        text
-          .setPlaceholder("chore: vault update")
-          .setValue(this.plugin.settings.gitCommitPrefix)
-          .onChange(async (value) => {
-            this.plugin.settings.gitCommitPrefix = value.trim() || DEFAULT_SETTINGS.gitCommitPrefix
             await this.plugin.saveSettings()
           }),
       )

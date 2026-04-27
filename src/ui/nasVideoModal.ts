@@ -12,11 +12,11 @@ class NasVideoModal extends Modal {
 
   onOpen(): void {
     const { contentEl } = this
-    this.setTitle("插入视频链接")
+    this.setTitle("Insert video link")
 
     new Setting(contentEl)
-      .setName("视频链接")
-      .setDesc("支持 alist 直链和 B 站链接")
+      .setName("Video link")
+      .setDesc("Supports Alist direct links and Bilibili links.")
       .addText((text) => {
         text
           .setPlaceholder("https://...")
@@ -25,7 +25,7 @@ class NasVideoModal extends Modal {
             this.inputValue = value.trim()
           })
 
-        text.inputEl.style.width = "100%"
+        text.inputEl.setCssProps({ width: "100%" })
         window.setTimeout(() => text.inputEl.focus(), 0)
         text.inputEl.addEventListener("keydown", (event) => {
           if (event.key === "Enter") {
@@ -37,11 +37,11 @@ class NasVideoModal extends Modal {
 
     const actionsEl = contentEl.createDiv({ cls: "vault-pilot-modal-actions" })
 
-    const cancelButton = actionsEl.createEl("button", { text: "取消" })
+    const cancelButton = actionsEl.createEl("button", { text: "Cancel" })
     cancelButton.addEventListener("click", () => this.close())
 
     const submitButton = actionsEl.createEl("button", {
-      text: "插入",
+      text: "Insert",
       cls: "mod-cta",
     })
     submitButton.addEventListener("click", () => this.submit())
